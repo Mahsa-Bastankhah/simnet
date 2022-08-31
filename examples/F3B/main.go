@@ -5,21 +5,25 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"io/ioutil"
+	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"go.dedis.ch/simnet"
 	"go.dedis.ch/simnet/network"
 	"go.dedis.ch/simnet/sim"
-	"go.dedis.ch/simnet/sim/docker"
+	"go.dedis.ch/simnet/sim/kubernetes"
 	"golang.org/x/xerrors"
 )
 
 type dkgSimple struct{}
 
 const n int = 10
+const batchSize int = 50
 
 func (s dkgSimple) Before(simio sim.IO, nodes []sim.NodeInfo) error {
 	return nil
@@ -27,6 +31,15 @@ func (s dkgSimple) Before(simio sim.IO, nodes []sim.NodeInfo) error {
 
 func (s dkgSimple) Execute(simio sim.IO, nodes []sim.NodeInfo) error {
 	fmt.Printf("Nodes: %v\n", nodes)
+
+	// initiating the log file for writing the delay and throughput data
+	f, err := os.OpenFile("/Users/bastankh/Desktop/EPFL-Int/simnet/logs/test.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		return xerrors.Errorf("failed to open a log file: %v", err)
+	}
+	defer f.Close()
+	wrt := io.MultiWriter(os.Stdout, f)
+	log.SetOutput(wrt)
 
 	out := &bytes.Buffer{}
 	opts := sim.ExecOptions{
@@ -37,7 +50,7 @@ func (s dkgSimple) Execute(simio sim.IO, nodes []sim.NodeInfo) error {
 	// 1. Exchange certificates
 	args := []string{"dkgcli", "--config", "/config", "minogrpc", "token"}
 
-	err := simio.Exec(nodes[0].Name, args, opts)
+	err = simio.Exec(nodes[0].Name, args, opts)
 	if err != nil {
 		return xerrors.Errorf("failed to exec cmd: %v", err)
 	}
@@ -47,7 +60,7 @@ func (s dkgSimple) Execute(simio sim.IO, nodes []sim.NodeInfo) error {
 	fmt.Printf("1[%s] - Token: %q\n", nodes[0].Name, out.String())
 
 	args = append([]string{"dkgcli", "--config", "/config", "minogrpc", "join",
-		"--address", "//" + nodes[0].Address + ":3000"}, strings.Split(connStr, " ")...)
+		"--address", "//" + nodes[0].Address + ":4000"}, strings.Split(connStr, " ")...)
 
 	for i := 1; i < len(nodes); i++ {
 		out.Reset()
@@ -95,15 +108,17 @@ func (s dkgSimple) Execute(simio sim.IO, nodes []sim.NodeInfo) error {
 	args = append(args, authorities...)
 	out.Reset()
 
+	start := time.Now()
 	err = simio.Exec(nodes[0].Name, args, opts)
 	if err != nil {
 		return xerrors.Errorf("failed to setup: %v", err)
 	}
+	setupTime := time.Since(start)
 
 	fmt.Printf("5[%s] - Setup: %q\n", nodes[0].Name, out.String())
 
 	// 4. verifiable Encrypt
-	batchSize := 64
+
 	var messages [][]byte
 	var ciphertexts string
 
@@ -141,10 +156,12 @@ func (s dkgSimple) Execute(simio sim.IO, nodes []sim.NodeInfo) error {
 		"--GBar", "1d0194fdc2fa2ffcc041d3ff12045b73c86e4ff95ff662a5eee82abdf44a53c7")
 	out.Reset()
 
+	start = time.Now()
 	err = simio.Exec(nodes[2].Name, args, opts)
 	if err != nil {
 		return xerrors.Errorf("failed to call decrypt: %v", err)
 	}
+	decryptionTime := time.Since(start)
 
 	decrypted := strings.Trim(out.String(), " \n\r")
 
@@ -152,8 +169,10 @@ func (s dkgSimple) Execute(simio sim.IO, nodes []sim.NodeInfo) error {
 
 	// 6. Assert
 	fmt.Printf("📄 Original message (hex):\t%x\n🔓 Decrypted message (hex):\t%s", messages, decrypted)
-
 	fmt.Println()
+
+	log.Printf("n = %d , batchSize = %d  ,decryption time = %v s, throughput =  %v tx/s , dkg setup time = %v s",
+		n, batchSize, decryptionTime.Seconds(), float32(batchSize)/float32(decryptionTime.Seconds()), float32(setupTime.Seconds()))
 	return nil
 }
 
@@ -163,22 +182,22 @@ func (s dkgSimple) After(simio sim.IO, nodes []sim.NodeInfo) error {
 
 func main() {
 	startArgs := []string{"--config", "/config", "start",
-		"--routing", "tree", "--listen", "tcp://0.0.0.0:3000"}
+		"--routing", "tree", "--listen", "tcp://0.0.0.0:4000"}
 
 	options := []sim.Option{
 		sim.WithTopology(
 			network.NewSimpleTopology(n, time.Millisecond*10),
 		),
-		sim.WithImage("bastankhah/f3b:latest", []string{}, []string{}, sim.NewTCP(2000)),
+		sim.WithImage("bastankhah/f3b:latest2", []string{}, []string{}, sim.NewTCP(2000)),
 		sim.WithUpdate(func(opts *sim.Options, _, IP string) {
-			opts.Args = append(startArgs, "--public", fmt.Sprintf("//%s:3000", IP))
+			opts.Args = append(startArgs, "--public", fmt.Sprintf("//%s:4000", IP))
 		}),
 	}
 
-	// kubeconfig := filepath.Join(os.Getenv("HOME"), ".kube", "config")
+	kubeconfig := filepath.Join(os.Getenv("HOME"), ".kube", "config")
 
-	// engine, err := kubernetes.NewStrategy(kubeconfig, options...)
-	engine, err := docker.NewStrategy(options...)
+	engine, err := kubernetes.NewStrategy(kubeconfig, options...)
+	// engine, err := docker.NewStrategy(options...)
 	if err != nil {
 		panic(err)
 	}
