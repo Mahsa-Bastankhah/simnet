@@ -936,17 +936,17 @@ func (kd *kubeEngine) makeDeployment(node network.Node, container apiv1.Containe
 						container,
 						{
 							Name:  ContainerMonitorName,
-							Image: fmt.Sprintf("dedis/simnet-monitor:%s", daemon.Version),
+							Image: fmt.Sprintf("dedis/simnet-monitor:%s", "latest"),
 							// ImagePullPolicy: "Never",
 							Args: []string{
 								"--container",
 								fmt.Sprintf("simnet-%s", node),
 							},
-							VolumeMounts: []apiv1.VolumeMount{
-								{
-									Name:      "dockersocket",
-									MountPath: "/var/run/docker.sock",
-								},
+							VolumeMounts: []apiv1.VolumeMount{ /*
+									{
+										Name:      "dockersocket",
+										MountPath: "/var/run/docker.sock",
+									},*/
 							},
 							SecurityContext: &apiv1.SecurityContext{
 								Capabilities: &apiv1.Capabilities{
