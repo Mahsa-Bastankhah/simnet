@@ -205,11 +205,17 @@ func (kd *kubeEngine) makeContainer() apiv1.Container {
 	}
 
 	return apiv1.Container{
-		Name:         ContainerAppName,
-		Image:        kd.options.Image,
-		Command:      kd.options.Cmd,
-		Args:         kd.options.Args,
-		Ports:        pp,
+		Name:    ContainerAppName,
+		Image:   kd.options.Image,
+		Command: kd.options.Cmd,
+		Args:    kd.options.Args,
+		Ports:   pp,
+		Env: []apiv1.EnvVar{
+			{
+				Name:  "LLVL",
+				Value: "info",
+			},
+		},
 		VolumeMounts: mounts,
 		Resources: apiv1.ResourceRequirements{
 			Requests: apiv1.ResourceList{

@@ -22,7 +22,9 @@ import (
 
 type dkgSimple struct{}
 
-const n = 4
+const nOld int = 4
+const nCommon int = 0
+const nNew int = 4
 
 func (s dkgSimple) Before(simio sim.IO, nodes []sim.NodeInfo) error {
 	return nil
@@ -32,7 +34,7 @@ func (s dkgSimple) Execute(simio sim.IO, nodes []sim.NodeInfo) error {
 	fmt.Printf("Nodes: %v\n", nodes)
 
 	// initiating the log file for writing the delay and throughput data
-	f, err := os.OpenFile("/home/mahsa/simnet/simnet/logs/test.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	f, err := os.OpenFile("/home/mahsa/simnet/simnet/logs/reshare.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	if err != nil {
 		return xerrors.Errorf("failed to open a log file: %v", err)
 	}
@@ -41,10 +43,9 @@ func (s dkgSimple) Execute(simio sim.IO, nodes []sim.NodeInfo) error {
 	log.SetOutput(wrt)
 
 	out := &bytes.Buffer{}
-	outErr := &bytes.Buffer{}
 	opts := sim.ExecOptions{
 		Stdout: out,
-		Stderr: outErr,
+		Stderr: out,
 	}
 
 	// 1. Exchange certificates
@@ -52,7 +53,6 @@ func (s dkgSimple) Execute(simio sim.IO, nodes []sim.NodeInfo) error {
 
 	err = simio.Exec(nodes[0].Name, args, opts)
 	if err != nil {
-		fmt.Printf("Cert exchange crashed: %v %v", out, outErr)
 		return xerrors.Errorf("failed to exec cmd: %v", err)
 	}
 
@@ -88,8 +88,8 @@ func (s dkgSimple) Execute(simio sim.IO, nodes []sim.NodeInfo) error {
 	}
 
 	// 3. DKG setup
-	authorities := make([]string, len(nodes)*2)
-	for i, node := range nodes {
+	authorities := make([]string, nOld*2)
+	for i, node := range nodes[0:nOld] {
 		rc, err := simio.Read(node.Name, "/config/dkgauthority")
 		if err != nil {
 			return xerrors.Errorf("failed to read dkgauthority file: %v", err)
@@ -106,7 +106,59 @@ func (s dkgSimple) Execute(simio sim.IO, nodes []sim.NodeInfo) error {
 		//fmt.Printf("4[%s] - Read authority: %q\n", node.Name, string(authority))
 	}
 
-	args = append([]string{"dkgcli", "--config", "/config", "dkg", "setup", "--threshold"}, fmt.Sprint(n))
+	args = append([]string{"dkgcli", "--config", "/config", "dkg", "setup", "--threshold"}, fmt.Sprint(nOld))
+	args = append(args, authorities...)
+	out.Reset()
+
+	err = simio.Exec(nodes[0].Name, args, opts)
+	if err != nil {
+		return xerrors.Errorf("failed to setup: %v", err)
+	}
+
+	fmt.Printf("5[%s] - Setup: %q\n", nodes[0].Name, out.String())
+
+	// 4. Encrypt
+	message := make([]byte, 20)
+
+	_, err = rand.Read(message)
+	if err != nil {
+		return xerrors.Errorf("failed to generate random message: %v", err)
+	}
+
+	args = append([]string{"dkgcli", "--config", "/config", "dkg", "encrypt", "--message"}, hex.EncodeToString(message))
+	out.Reset()
+
+	err = simio.Exec(nodes[1].Name, args, opts)
+	if err != nil {
+		return xerrors.Errorf("failed to call encrypt: %v", err)
+	}
+
+	encrypted := strings.Trim(out.String(), " \n\r")
+
+	fmt.Printf("6[%s] - Encrypt: %q\n", nodes[1].Name, encrypted)
+
+	// 5. reshare
+	authorities = make([]string, (nNew+nCommon)*2)
+	nTotal := nNew + nOld
+
+	for i, node := range nodes[nOld-nCommon : nTotal] {
+		rc, err := simio.Read(node.Name, "/config/dkgauthority")
+		if err != nil {
+			return xerrors.Errorf("failed to read dkgauthority file: %v", err)
+		}
+
+		authority, err := ioutil.ReadAll(rc)
+		if err != nil {
+			return xerrors.Errorf("failed to read authority: %v", err)
+		}
+
+		authorities[i*2] = "--authority"
+		authorities[i*2+1] = string(authority)
+
+		//fmt.Printf("4[%s] - Read authority: %q\n", node.Name, string(authority))
+	}
+
+	args = append([]string{"dkgcli", "--config", "/config", "dkg", "reshare", "--thresholdNew"}, fmt.Sprint(nNew+nCommon))
 	args = append(args, authorities...)
 	out.Reset()
 
@@ -115,71 +167,29 @@ func (s dkgSimple) Execute(simio sim.IO, nodes []sim.NodeInfo) error {
 	if err != nil {
 		return xerrors.Errorf("failed to setup: %v", err)
 	}
-	setupTime := time.Since(start)
+	reshareTime := time.Since(start)
 
-	fmt.Printf("5[%s] - Setup: %q\n", nodes[0].Name, out.String())
+	fmt.Printf("5[%s] - Reshare: %q\n", nodes[0].Name, out.String())
 
-	// 4. verifiable Encrypt
+	// 5. Decrypt
+	args = append([]string{"dkgcli", "--config", "/config", "dkg", "decrypt", "--encrypted"}, encrypted)
+	out.Reset()
 
-	var messages [][]byte
-	var ciphertexts string
-
-	batchSizeSlice := []int{1, 2, 4, 8, 16, 32, 64, 128}
-
-	for _, batchSize := range batchSizeSlice {
-		for i := 0; i < batchSize; i++ {
-
-			message := make([]byte, 20)
-
-			_, err = rand.Read(message)
-			if err != nil {
-				return xerrors.Errorf("failed to generate random message: %v", err)
-			}
-
-			messages = append(messages, message)
-
-			args = append([]string{"dkgcli", "--config", "/config", "dkg", "verifiableEncrypt", "--GBar"},
-				"1d0194fdc2fa2ffcc041d3ff12045b73c86e4ff95ff662a5eee82abdf44a53c7", "--message", hex.EncodeToString(message))
-
-			out.Reset()
-
-			err = simio.Exec(nodes[1].Name, args, opts)
-			if err != nil {
-				return xerrors.Errorf("failed to call encrypt: %v", err)
-			}
-
-			ciphertext := strings.Trim(out.String(), " \n\r")
-			ciphertexts = ciphertexts + ciphertext
-
-			//fmt.Printf("6[%s] - Encrypt: %q\n", nodes[1].Name, ciphertext)
-			fmt.Printf("6[%s] - Encrypt %d\n", nodes[1].Name, i)
-
-		}
-
-		// 5. Decrypt
-		args = append([]string{"dkgcli", "--config", "/config", "dkg", "verifiableDecrypt", "--ciphertexts"}, strings.TrimSuffix(ciphertexts, ":"),
-			"--GBar", "1d0194fdc2fa2ffcc041d3ff12045b73c86e4ff95ff662a5eee82abdf44a53c7")
-		out.Reset()
-
-		start = time.Now()
-		err = simio.Exec(nodes[2].Name, args, opts)
-		if err != nil {
-			return xerrors.Errorf("failed to call decrypt: %v", err)
-		}
-		decryptionTime := time.Since(start)
-
-		decrypted := strings.Trim(out.String(), " \n\r")
-
-		fmt.Printf("7[%s] - Decrypt: %q\n", nodes[2].Name, decrypted)
-
-		// 6. Assert
-		fmt.Printf("📄 Original message (hex):\t%x\n🔓 Decrypted message (hex):\t%s", messages, decrypted)
-		fmt.Println()
-
-		log.Printf("n = %d , batchSize = %d  ,decryption time = %v s, throughput =  %v tx/s , dkg setup time = %v s",
-			n, batchSize, decryptionTime.Seconds(), float32(batchSize)/float32(decryptionTime.Seconds()), float32(setupTime.Seconds()))
-
+	err = simio.Exec(nodes[nOld+1].Name, args, opts)
+	if err != nil {
+		return xerrors.Errorf("failed to call decrypt: %v", err)
 	}
+
+	decrypted := strings.Trim(out.String(), " \n\r")
+
+	fmt.Printf("7[%s] - Decrypt: %q\n", nodes[nOld+1].Name, decrypted)
+
+	// 6. Assert
+	fmt.Printf("📄 Original message (hex):\t%x\n🔓 Decrypted message (hex):\t%s", message, decrypted)
+
+	fmt.Println()
+	log.Printf("n old = %d , n new = %d  , n common = %d , resharing time = %v s",
+		nOld, nNew, nCommon, reshareTime.Seconds())
 
 	return nil
 }
@@ -194,9 +204,9 @@ func main() {
 
 	options := []sim.Option{
 		sim.WithTopology(
-			network.NewSimpleTopology(n, time.Millisecond*10),
+			network.NewSimpleTopology(nOld+nNew, time.Millisecond*10),
 		),
-		sim.WithImage("bastankhah/f3b:latest4", []string{}, []string{}, sim.NewTCP(2000)),
+		sim.WithImage("bastankhah/f3b:latest", []string{}, []string{}, sim.NewTCP(2000)),
 		sim.WithUpdate(func(opts *sim.Options, _, IP string) {
 			opts.Args = append(startArgs, "--public", fmt.Sprintf("//%s:2000", IP))
 		}),
