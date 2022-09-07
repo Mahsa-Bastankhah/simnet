@@ -9,14 +9,13 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"go.dedis.ch/simnet"
 	"go.dedis.ch/simnet/network"
 	"go.dedis.ch/simnet/sim"
-	"go.dedis.ch/simnet/sim/kubernetes"
+	"go.dedis.ch/simnet/sim/docker"
 	"golang.org/x/xerrors"
 )
 
@@ -34,7 +33,7 @@ func (s dkgSimple) Execute(simio sim.IO, nodes []sim.NodeInfo) error {
 	fmt.Printf("Nodes: %v\n", nodes)
 
 	// initiating the log file for writing the delay and throughput data
-	f, err := os.OpenFile("/home/mahsa/simnet/simnet/logs/reshare.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	f, err := os.OpenFile("../../logs/reshare.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	if err != nil {
 		return xerrors.Errorf("failed to open a log file: %v", err)
 	}
@@ -85,6 +84,7 @@ func (s dkgSimple) Execute(simio sim.IO, nodes []sim.NodeInfo) error {
 		}
 
 		fmt.Printf("3[%s] - Listen: %q\n", node.Name, out.String())
+		time.Sleep(2 * time.Second)
 	}
 
 	// 3. DKG setup
@@ -206,16 +206,16 @@ func main() {
 		sim.WithTopology(
 			network.NewSimpleTopology(nOld+nNew, time.Millisecond*10),
 		),
-		sim.WithImage("bastankhah/f3b:latest", []string{}, []string{}, sim.NewTCP(2000)),
+		sim.WithImage("bastankhah/f3b:latest5", []string{}, []string{}, sim.NewTCP(2000)),
 		sim.WithUpdate(func(opts *sim.Options, _, IP string) {
 			opts.Args = append(startArgs, "--public", fmt.Sprintf("//%s:2000", IP))
 		}),
 	}
 
-	kubeconfig := filepath.Join(os.Getenv("HOME"), ".kube", "config")
+	//kubeconfig := filepath.Join(os.Getenv("HOME"), ".kube", "config")
 
-	engine, err := kubernetes.NewStrategy(kubeconfig, options...)
-	//engine, err := docker.NewStrategy(options...)
+	//engine, err := kubernetes.NewStrategy(kubeconfig, options...)
+	engine, err := docker.NewStrategy(options...)
 	if err != nil {
 		panic(err)
 	}

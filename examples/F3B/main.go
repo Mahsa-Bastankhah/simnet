@@ -9,14 +9,13 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"go.dedis.ch/simnet"
 	"go.dedis.ch/simnet/network"
 	"go.dedis.ch/simnet/sim"
-	"go.dedis.ch/simnet/sim/kubernetes"
+	"go.dedis.ch/simnet/sim/docker"
 	"golang.org/x/xerrors"
 )
 
@@ -32,7 +31,7 @@ func (s dkgSimple) Execute(simio sim.IO, nodes []sim.NodeInfo) error {
 	fmt.Printf("Nodes: %v\n", nodes)
 
 	// initiating the log file for writing the delay and throughput data
-	f, err := os.OpenFile("/home/mahsa/simnet/simnet/logs/test.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	f, err := os.OpenFile("../../logs/test.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	if err != nil {
 		return xerrors.Errorf("failed to open a log file: %v", err)
 	}
@@ -120,11 +119,10 @@ func (s dkgSimple) Execute(simio sim.IO, nodes []sim.NodeInfo) error {
 	fmt.Printf("5[%s] - Setup: %q\n", nodes[0].Name, out.String())
 
 	// 4. verifiable Encrypt
-
 	var messages [][]byte
 	var ciphertexts string
 
-	batchSizeSlice := []int{1, 2, 4, 8, 16, 32, 64, 128}
+	batchSizeSlice := []int{1, 2, 4, 8, 16}
 
 	for _, batchSize := range batchSizeSlice {
 		for i := 0; i < batchSize; i++ {
@@ -196,16 +194,18 @@ func main() {
 		sim.WithTopology(
 			network.NewSimpleTopology(n, time.Millisecond*10),
 		),
-		sim.WithImage("bastankhah/f3b:latest4", []string{}, []string{}, sim.NewTCP(2000)),
+		sim.WithImage("bastankhah/f3b:latest5", []string{}, []string{}, sim.NewTCP(2000)),
 		sim.WithUpdate(func(opts *sim.Options, _, IP string) {
 			opts.Args = append(startArgs, "--public", fmt.Sprintf("//%s:2000", IP))
 		}),
 	}
 
-	kubeconfig := filepath.Join(os.Getenv("HOME"), ".kube", "config")
+	// configuration for Kubernetes
+	//kubeconfig := filepath.Join(os.Getenv("HOME"), ".kube", "config")
+	//engine, err := kubernetes.NewStrategy(kubeconfig, options...)
 
-	engine, err := kubernetes.NewStrategy(kubeconfig, options...)
-	//engine, err := docker.NewStrategy(options...)
+	// configuration for minikube
+	engine, err := docker.NewStrategy(options...)
 	if err != nil {
 		panic(err)
 	}
